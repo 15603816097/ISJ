@@ -1,0 +1,169 @@
+% V7 results draft based on the audited DFG archived score report.
+% Reference: OXTS/GPS correlated, NOT independent physical GT.
+\section{Experimental Evaluation}
+\label{sec:experiments_v7}
+
+\subsection{Development and Reserved Sequence Protocol}
+The reliability networks were trained on a synthetic degraded-GPS
+candidate extracted from KITTI Raw sequence
+\texttt{2011\_10\_03\_drive\_0027\_sync} (4,544 frames).
+The training anchors were $[63,3178)$ (3,115 samples)
+and the previously explored development-validation anchors were
+$[3180,3860)$ (680 samples). The 0027 validation partition
+cannot be treated as an independent test.
+
+Cross-date evaluation used
+\texttt{2011\_09\_30\_drive\_0016\_sync} (279 frames) and
+\texttt{2011\_09\_30\_drive\_0020\_sync} (1,104 frames).
+Synthetic degradation is generated from a fixed development
+schedule resampled in normalized sequence time. In each drive,
+all four compared methods use exactly the same degraded GPS,
+gyroscope, LiDAR and stereo factor measurements and calibration.
+Only GPS position-factor covariance differs.
+
+\subsection{Evaluation Metrics and Compared Methods}
+Let $\mathbf{p}_t$ be optimized pose translation and
+$\mathbf{q}_t$ the original \emph{uncorrupted OXTS-derived GPS}
+position. The primary origin-relative three-dimensional error is
+\begin{equation}
+E_{3D}=\sqrt{\frac{1}{N}
+\sum_{t=0}^{N-1}
+\|\mathbf{p}_t-(\mathbf{q}_t-\mathbf{q}_0)\|_2^2}.
+\label{eq:v7_eval_rmse}
+\end{equation}
+The 2D version uses the first two axes. Translation-only
+$k$-frame relative displacement RMSE ($k=1,10$)
+compares $\mathbf{p}_{t+k}-\mathbf{p}_t$ with
+$\mathbf{q}_{t+k}-\mathbf{q}_t$. These are neither
+six-degree-of-freedom RPE nor independent physical
+ground-truth localization errors: original OXTS GPS
+also generated the synthetic degraded GPS measurements.
+
+The four fixed cases are Axis-Fixed (training-only
+axis RMS covariance), GRU96-Cap4, GRU106-Cap4
+(capacity control), and Mamba-Cap4. The three
+learned cases apply the same training-fitted five-bin
+mapping and GPS information cap; only the $h=0$
+current-reliability head is used to weight the graph.
+
+\subsection{Cross-Date Position Error}
+Table~\ref{tab:v7_main} reports primary position errors.
+Mamba-Cap4 has the smallest 3D error on 0016 at
+2.4467 m, narrowly below GRU96-Cap4 at 2.4732 m
+by 0.0265 m (approximately 1.07\%). On 0020
+the ranking reverses: GRU96-Cap4 obtains 3.2032 m
+while Mamba-Cap4 obtains 6.9844 m, roughly 2.18
+times the GRU96 error.
+
+\begin{table}[!t]
+\centering
+\caption{Origin-relative OXTS/GPS 3D RMSE (m; lower is better).
+The reference is measurement-correlated.}
+\label{tab:v7_main}
+\begin{tabular}{lcc}
+\hline
+Method & 0016 (279) & 0020 (1104)\\
+\hline
+Axis-Fixed & 2.6526 & 21.0158\\
+GRU96-Cap4 & 2.4732 & \textbf{3.2032}\\
+GRU106-Cap4 & 2.6329 & 4.2117\\
+Mamba-Cap4 & \textbf{2.4467} & 6.9844\\
+\hline
+\end{tabular}
+\end{table}
+
+Against Axis-Fixed on 0020, 3D RMSE decreases
+by 84.76\% with GRU96-Cap4 and 66.77\% with
+Mamba-Cap4. On 0016, the corresponding reductions
+are approximately 6.76\% and 7.76\%, respectively.
+The improvements indicate a conditional effect
+of the tested dynamic GPS weighting. They do not
+establish universal Mamba superiority, calibrated
+reliability, or a statistically significant difference
+between model architectures.
+
+\subsection{Horizontal and Short-Term Motion Diagnostics}
+Table~\ref{tab:v7_secondary} compares 2D RMSE and
+translation-displacement errors. Mamba-Cap4 yields
+the lowest secondary errors on 0016, while
+GRU96-Cap4 is best on 0020. On the longer drive,
+the 10-frame translation error is 2.0928 m for
+GRU96-Cap4, compared with 4.8892 m for Mamba-Cap4
+and 9.3911 m for Axis-Fixed.
+
+\begin{table*}[!t]
+\centering
+\caption{Position and displacement errors (m; lower is better).
+Displacement metrics compare translation only, not full SE(3) RPE.}
+\label{tab:v7_secondary}
+\begin{tabular}{llccc}
+\hline
+Drive & Method & 2D RMSE & 1-frame RMSE & 10-frame RMSE\\
+\hline
+0016 & Axis-Fixed & 2.6154 & 0.2778 & 1.6519\\
+0016 & GRU96-Cap4 & 2.4323 & 0.2987 & 1.7829\\
+0016 & GRU106-Cap4 & 2.5957 & 0.2995 & 1.7824\\
+0016 & Mamba-Cap4 & \textbf{2.4209} & \textbf{0.2719} &
+\textbf{1.5997}\\
+\hline
+0020 & Axis-Fixed & 16.5548 & 1.0455 & 9.3911\\
+0020 & GRU96-Cap4 & \textbf{2.8535} & \textbf{0.3435} &
+\textbf{2.0928}\\
+0020 & GRU106-Cap4 & 3.4844 & 0.4529 & 3.2205\\
+0020 & Mamba-Cap4 & 6.5991 & 0.5891 & 4.8892\\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Optimization Stability and Execution Audit}
+The 0016 graphs share 279 GPS factors, 278 IMU,
+278 LiDAR, 275 camera factors, and one anchor prior.
+The 0020 graphs share 1,104 GPS, 1,103 IMU,
+1,103 LiDAR, 1,063 camera factors and one prior.
+All eight runs satisfy the predeclared numerical
+stability criterion. Every 0016 method takes two
+LM passes. On 0020, GRU96-Cap4 takes three
+passes and the other cases take two. Objective
+values cannot be compared across methods directly
+because the covariance weights differ; numerical
+stability does not certify a global optimum.
+The recorded LM times omit network inference and
+odometry construction and are not a real-time
+performance benchmark.
+
+\subsection{Post-Release Synchronization Incident and Limitations}
+The initial one-time reserved release built the
+0016 four-sensor measurements, but the 0020
+preprocessing was interrupted by a strict
+100-ms sensor-to-OXTS timestamp requirement.
+A read-only investigation after the release
+identified common negative startup offsets
+of approximately 123--126 ms at precisely
+frames 0--2 of the 0020 LiDAR/stereo streams.
+A narrow \emph{post-release} engineering exception
+was then introduced for this shared early-frame
+pattern. Neither frames nor timestamps were
+deleted, reordered or changed; the original
+0016 build files were preserved. Both drives
+were solved and scored only after the audited
+recovery, and the final report and manifests
+were subsequently verified with SHA256.
+
+Because the exception was defined after the
+reserved drives were opened, these results
+cannot be described as fully preregistered or
+entirely untouched. Although reference
+position errors did not inform the noise rules
+or model selection, this procedural limitation
+must be disclosed. Additional limitations are
+the measurement-correlated OXTS reference,
+only two cross-date sequences, one model seed,
+one held-out initialization, and the absence
+of incremental inference or full-state accuracy
+evaluation. In particular, the predictive
+$h=1,2$ and Beta evidence uncertainty heads
+are not used by the evaluated factor graph.
+The experimental evidence therefore concerns
+\emph{current-reliability-guided adaptive GPS
+covariance}, not validated anticipatory
+Mamba-based sensor fusion.

@@ -1,0 +1,132 @@
+% V7 evidence-bounded Method draft. Not submission ready.
+\section{Reliability-Guided GPS Covariance Adaptation}
+\label{sec:method_v7}
+
+\subsection{System Scope and Batch Factor-Graph Formulation}
+The implemented estimator optimizes vehicle poses
+$\mathbf{T}_{0:N-1}\in\mathrm{SE}(3)$ using synthetically degraded
+GPS positions, gyroscope measurements, LiDAR odometry, and stereo
+visual odometry. The formulation is an \emph{offline batch} pose graph,
+not an online incremental smoother or a full velocity--bias
+state estimator. A fixed identity prior anchors the first pose.
+A GPS factor constrains translation at each time step, while
+relative gyroscope, LiDAR, and stereo constraints couple adjacent
+poses. The GPS factor uses effectively uninformative rotational
+noise, and the three non-GPS noise settings are unchanged between
+compared methods.
+
+For illustration, the optimized objective is
+\begin{equation}
+\begin{aligned}
+\min_{\mathbf{T}_{0:N-1}}\quad&
+\|\mathbf{r}_{0}\|_{\mathbf{\Omega}_0}^{2}+
+\sum_{t=0}^{N-1}
+\|\mathbf{p}(\mathbf{T}_t)-\mathbf{z}^{g}_t
+\|_{\mathbf{\Sigma}^{g}_t}^{2}\\
+&+\sum_{t=0}^{N-2}\bigl(
+\|\mathbf{r}^{i}_{t,t+1}\|_{\mathbf{\Omega}_i}^{2}+
+\|\mathbf{r}^{l}_{t,t+1}\|_{\mathbf{\Omega}_l}^{2}+
+\|\mathbf{r}^{c}_{t,t+1}\|_{\mathbf{\Omega}_c}^{2}\bigr),
+\end{aligned}
+\label{eq:v7_objective}
+\end{equation}
+where $\|\mathbf{r}\|_{\mathbf{\Sigma}}^2$ denotes Mahalanobis
+weighting and $\mathbf{p}(\mathbf{T})$ extracts position.
+The implementation uses GTSAM \texttt{PriorFactorPose3} and
+\texttt{BetweenFactorPose3}. The inertial link is a
+gyroscope-derived relative-rotation pseudo-factor; it is not
+a full preintegrated IMU factor. The graph is optimized by
+Levenberg--Marquardt.
+
+\subsection{Causal Features and Reliability Networks}
+The reliability model observes only present and historical
+\emph{degraded} GPS positions. Its 21-dimensional feature at
+each frame consists of position increments, nominal
+finite-difference velocity and acceleration, and sliding-window
+statistics of their magnitudes. The nominal sampling period is
+$0.1$ s and the feature-statistics window spans ten frames.
+A 64-frame causal sequence is normalized by training-only
+feature medians and interquartile ranges, then clipped to
+$[-20,20]$.
+
+Two-layer GRU encoders are compared with a two-block Mamba encoder.
+A GRU with width 96 contains 114,630 trainable parameters;
+a width-106 GRU capacity control contains 139,290; Mamba with
+width 96 contains 139,590. All use a shared input-projection
+design, comparable Beta output heads, and the same supervision
+objective. The Mamba case uses actual Mamba sequence blocks
+rather than a recurrent substitute.
+
+Each network predicts Beta-distribution parameters for
+$h\in\{0,1,2\}$, representing current and two future
+synthetic reliability targets:
+\begin{equation}
+\alpha_{t,h}=1+\mathrm{softplus}(a_{t,h})+\epsilon,\qquad
+\beta_{t,h}=1+\mathrm{softplus}(b_{t,h})+\epsilon,
+\end{equation}
+\begin{equation}
+\hat r_{t,h}=
+\frac{\alpha_{t,h}}{\alpha_{t,h}+\beta_{t,h}},\qquad
+U_{t,h}=\frac{2}{\alpha_{t,h}+\beta_{t,h}}.
+\label{eq:v7_reliability}
+\end{equation}
+Model training minimizes a weighted Beta negative log likelihood
+for the three heads with relative weights $1.0:0.7:0.5$, plus
+a weak evidence penalty. Training and model selection use the
+already explored KITTI 0027 development data; the nominally
+held-out drives do not provide network training signals.
+The quantity $U$ is a Beta concentration proxy, not a validated
+epistemic uncertainty estimate or physically calibrated noise.
+
+\subsection{Training-Only Axis Noise Mapping and Cap4}
+A five-bin axis-noise mapping is fitted from 0027
+\emph{training} degraded GPS errors and synthetic oracle
+reliability targets. For reliability bin $b$ and
+axis $a\in\{x,y,z\}$, the empirical RMS error is
+\begin{equation}
+s_{b,a}=\sqrt{\frac{1}{|\mathcal I_b|}
+\sum_{t\in\mathcal I_b}
+(z^{\mathrm{deg}}_{t,a}-z^{\mathrm{ref}}_{t,a})^2}.
+\label{eq:v7_axisfit}
+\end{equation}
+The original implementation applies monotone enforcement
+and a positive floor to the bin values.
+Linear interpolation using the predicted current reliability
+$\hat r_{t,0}$ yields $\tilde s_{t,a}$. To limit
+overconfident weighting, the dynamic axis sigma is
+\begin{equation}
+s_{t,a}=\max\left(
+\tilde s_{t,a},
+s_a^{\mathrm{fixed}}/\sqrt{4}\right),\quad
+\mathbf{\Sigma}^{g}_t=
+\mathrm{diag}(s_{t,x}^2,s_{t,y}^2,s_{t,z}^2).
+\label{eq:v7_cap4}
+\end{equation}
+Thus GPS precision cannot exceed four times the
+training-only fixed-axis precision. This Cap4
+restriction is an engineering heuristic and is
+\emph{not} a proven probabilistic calibration.
+For the first 63 frames, all cases use the same
+training-only fixed-axis noise because a full
+64-frame context is unavailable.
+
+Importantly, the tested graph uses only
+$\hat r_{t,0}$ for weighting. The $h=1,2$
+prediction heads and evidence proxy $U$ are
+\emph{not} fed into the evaluated factor graph.
+Consequently, these experiments do not establish
+anticipatory reliability weighting, feedforward--feedback
+control, factor forgetting, or iSAM2 performance.
+
+\subsection{Optimization Consistency}
+For a given drive, every comparison uses identical
+generated GPS, IMU, LiDAR, and stereo factors,
+date-specific calibration, and identical
+LiDAR-integrated initial poses. No optimized
+development trajectory is reused to initialize
+the held-out drives. Every case uses at most
+12 LM passes with at most 100 iterations per pass.
+A run is marked numerically stable only when
+relative objective reduction is at most $10^{-6}$
+and the RMS position update is at most $0.01$ m.
+Numerical stability does not certify a global optimum.
